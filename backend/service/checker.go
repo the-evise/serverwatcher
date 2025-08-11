@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -55,6 +56,16 @@ func (s *Store) startChecker(svc *Service, stopChan chan struct{}) {
 				h = h[len(h)-int(maxHistory):]
 			}
 			s.histories[svc.ID] = h
+
+			prevStatus := s.lastNotifiedStatus[svc.ID]
+			if status.Status != prevStatus {
+				// Only notify on change (OK->FAIL or FAIL->OK)
+				go SendTelegramNotification(fmt.Sprintf(
+					"[Serverwatcher]\nService: %s\nURL: %s\nStatus: %s\nResponse: %d ms\nTime: %s",
+					svc.Name, svc.URL, status.Status, status.ResponseMs, status.CheckedAt,
+				))
+				s.lastNotifiedStatus[svc.ID] = status.Status
+			}
 
 			s.Unlock()
 		case <-stopChan:

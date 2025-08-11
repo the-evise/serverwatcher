@@ -7,11 +7,13 @@ import (
 )
 
 func main() {
+
 	http.HandleFunc("/ping", withCORS(api.PingHandler))
 	http.HandleFunc("/status", withCORS(api.StatusHandler))
 	http.HandleFunc("/services/add", withCORS(api.AddServiceHandler))
 	http.HandleFunc("/services/delete", withCORS(api.DeleteServiceHandler))
 	http.HandleFunc("/services/history", withCORS(api.ServiceHistoryHandler))
+	http.HandleFunc("/services/update", withCORS(api.UpdateServiceHandler))
 
 	// Add CORS headers if calling from Flutter web
 

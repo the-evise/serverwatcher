@@ -39,6 +39,27 @@ class StatusService {
     }
   }
 
+  static Future<void> updateService({
+    required int id,
+    required String name,
+    required String url,
+    required int interval,
+  }) async {
+    final res = await http.put(
+      Uri.parse('$baseUrl/services/update'),
+      headers: {'Content-Type': 'application/json'},
+      body: json.encode({
+        'id': id,
+        'name': name,
+        'url': url,
+        'interval': interval,
+      }),
+    );
+    if (res.statusCode != 204) {
+      throw Exception('failed to update service');
+    }
+  }
+
   static Future<List<ServiceStatus>> fetchHistory(int id) async {
     final response = await http.get(
       Uri.parse('$baseUrl/services/history?id=$id'),

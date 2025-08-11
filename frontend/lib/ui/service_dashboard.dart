@@ -1,13 +1,13 @@
+// ui/service_dashboard.dart
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:frontend/ui/history_chart.dart';
 import '../models/service.dart';
 import '../services/status_service.dart';
+import 'widgets/service_card.dart';
 
 class ServiceDashboard extends StatefulWidget {
   const ServiceDashboard({super.key});
-
   @override
   State<ServiceDashboard> createState() => _ServiceDashboardState();
 }
@@ -15,6 +15,7 @@ class ServiceDashboard extends StatefulWidget {
 class _ServiceDashboardState extends State<ServiceDashboard> {
   late Future<List<ServiceStatus>> _futureServices;
   Timer? _refreshTimer;
+
   final _nameController = TextEditingController();
   final _urlController = TextEditingController();
   final _intervalController = TextEditingController(text: '10');
@@ -24,7 +25,7 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     super.initState();
     _refresh();
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 10),
+      const Duration(seconds: 3),
       (_) => _refresh(),
     );
   }
@@ -36,17 +37,24 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
   }
 
   void _refresh() {
+    final fut = StatusService.fetchStatuses(); // do async creation outside
     setState(() {
-      _futureServices = StatusService.fetchStatuses();
+      _futureServices = fut; // assign Future synchronously
     });
   }
 
   Future<void> _addService() async {
-    await StatusService.addService(
-      name: _nameController.text,
-      url: _urlController.text,
-      interval: int.tryParse(_intervalController.text) ?? 10,
-    );
+    final name = _nameController.text.trim();
+    final url = _urlController.text.trim();
+    final interval = int.tryParse(_intervalController.text.trim()) ?? 10;
+
+    if (name.isEmpty || url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name and URL are required')),
+      );
+      return;
+    }
+    await StatusService.addService(name: name, url: url, interval: interval);
     _nameController.clear();
     _urlController.clear();
     _intervalController.text = '10';
@@ -58,214 +66,253 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     _refresh();
   }
 
-  void _showHistoryDialog(int id, String name) {
-    showDialog(
+  Future<void> _editService(ServiceStatus svc) async {
+    await _showEditDialog(svc);
+  }
+
+  Future<void> _showEditDialog(ServiceStatus svc) async {
+    final nameCtrl = TextEditingController(text: svc.name);
+    final urlCtrl = TextEditingController(text: svc.url);
+    final intervalCtrl = TextEditingController(
+      text: '10',
+    ); // optional: wire actual interval if added to model
+
+    await showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text('$name – History'),
-        content: FutureBuilder<List<ServiceStatus>>(
-          future: StatusService.fetchHistory(id),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const SizedBox(
-                height: 80,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            } else if (snapshot.hasError) {
-              return Text('Error: ${snapshot.error}');
-            } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Text('No history.');
-            } else {
-              final history = snapshot.data!;
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  HistoryChart(history: history),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: 300,
-                    height: 200,
-                    child: ListView.builder(
-                      itemCount: history.length,
-                      itemBuilder: (context, idx) {
-                        final entry = history[idx];
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            '${entry.status} (${entry.responseMs} ms)',
-                          ),
-                          subtitle: Text(entry.checkedAt),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              );
-            }
-          },
+        title: const Text('Edit Service'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(labelText: 'Name'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: urlCtrl,
+              decoration: const InputDecoration(labelText: 'URL'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: intervalCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Interval (s)'),
+            ),
+          ],
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = nameCtrl.text.trim();
+              final url = urlCtrl.text.trim();
+              final interval = int.tryParse(intervalCtrl.text.trim()) ?? 10;
+              if (name.isEmpty || url.isEmpty) return;
+              await StatusService.updateService(
+                id: svc.id,
+                name: name,
+                url: url,
+                interval: interval,
+              );
+              if (context.mounted) Navigator.pop(context);
+              _refresh();
+            },
+            child: const Text('Save'),
           ),
         ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Add service form
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Row(
+  void _showHistorySheet(int id, String name) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: SizedBox(
+          height: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: TextField(
-                  controller: _nameController,
-                  decoration: const InputDecoration(labelText: 'Name'),
+              Text(
+                '$name – History',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: TextField(
-                  controller: _urlController,
-                  decoration: const InputDecoration(labelText: 'URL'),
-                ),
+              const SizedBox(height: 12),
+              FutureBuilder<List<ServiceStatus>>(
+                future: StatusService.fetchHistory(id),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Expanded(
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+                  if (snapshot.hasError) {
+                    return Expanded(
+                      child: Center(child: Text('Error: ${snapshot.error}')),
+                    );
+                  }
+                  final history = snapshot.data ?? [];
+                  if (history.isEmpty) {
+                    return const Expanded(
+                      child: Center(child: Text('No history')),
+                    );
+                  }
+                  return Expanded(
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: 140,
+                          child: HistoryChart(history: history),
+                        ),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: ListView.builder(
+                            itemCount: history.length,
+                            itemBuilder: (context, i) {
+                              final h = history[i];
+                              return ListTile(
+                                dense: true,
+                                title: Text('${h.status} • ${h.responseMs} ms'),
+                                subtitle: Text(
+                                  h.checkedAt
+                                      .split('.')
+                                      .first
+                                      .replaceAll('T', ' '),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 70,
-                child: TextField(
-                  controller: _intervalController,
-                  decoration: const InputDecoration(labelText: 'Interval'),
-                  keyboardType: TextInputType.number,
-                ),
-              ),
-              IconButton(icon: const Icon(Icons.add), onPressed: _addService),
             ],
           ),
         ),
-        // Service list
-        Expanded(
-          child: FutureBuilder<List<ServiceStatus>>(
-            future: _futureServices,
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final services = snapshot.data!;
-              if (services.isEmpty) {
-                return const Center(child: Text('No services yet'));
-              }
-              return GridView.count(
-                crossAxisCount: 2,
-                childAspectRatio: 1.3,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Serverwatcher'),
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Add form card
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Card(
+              child: Padding(
                 padding: const EdgeInsets.all(12),
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                children: services.map((svc) {
-                  return Card(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    elevation: 5,
-                    color: svc.status == 'OK'
-                        ? const Color(0xFF8E24AA)
-                        : const Color(0xFFB287F8).withOpacity(0.3),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                svc.status == 'OK'
-                                    ? Icons.check_circle
-                                    : Icons.error,
-                                color: svc.status == 'OK'
-                                    ? const Color(0xFFFFD700)
-                                    : Colors.redAccent,
-                                size: 28,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  svc.name,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 18,
-                                    color: Colors.white,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.history,
-                                  color: Colors.white70,
-                                ),
-                                onPressed: () =>
-                                    _showHistoryDialog(svc.id, svc.name),
-                                tooltip: "Show history",
-                              ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete,
-                                  color: Colors.redAccent,
-                                ),
-                                onPressed: () => _deleteService(svc.id),
-                                tooltip: "Delete service",
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 10),
-                          Text(
-                            svc.url,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 13,
-                            ),
-                            maxLines: 1,
-                          ),
-                          const Spacer(),
-                          Row(
-                            children: [
-                              Text(
-                                '${svc.responseMs} ms',
-                                style: const TextStyle(
-                                  color: Color(0xFFFFD700),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const Spacer(),
-                              Text(
-                                svc.checkedAt
-                                    .split('.')
-                                    .first
-                                    .replaceAll('T', ' '),
-                                style: const TextStyle(
-                                  color: Colors.white60,
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _nameController,
+                        decoration: const InputDecoration(labelText: 'Name'),
                       ),
                     ),
-                  );
-                }).toList(),
-              );
-            },
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextField(
+                        controller: _urlController,
+                        decoration: const InputDecoration(labelText: 'URL'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 110,
+                      child: TextField(
+                        controller: _intervalController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Interval (s)',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      onPressed: _addService,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
-      ],
+
+          // Grid
+          Expanded(
+            child: FutureBuilder<List<ServiceStatus>>(
+              future: _futureServices,
+              builder: (context, snapshot) {
+                if (!snapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final services = snapshot.data!
+                  ..sort((a, b) => a.id.compareTo(b.id));
+                if (services!.isEmpty)
+                  return const Center(child: Text('No services yet'));
+
+                return LayoutBuilder(
+                  builder: (context, constraints) {
+                    final w = constraints.maxWidth;
+                    final cross = w >= 1200
+                        ? 4
+                        : w >= 900
+                        ? 3
+                        : w >= 600
+                        ? 2
+                        : 1;
+
+                    return GridView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: cross,
+                        crossAxisSpacing: 14,
+                        mainAxisSpacing: 14,
+                        childAspectRatio: 1.35,
+                      ),
+                      itemCount: services.length,
+                      itemBuilder: (context, i) {
+                        final s = services[i];
+                        return ServiceCard(
+                          svc: s,
+                          onEdit: () => _editService(s),
+                          onDelete: () => _deleteService(s.id),
+                          onHistory: () => _showHistorySheet(s.id, s.name),
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
