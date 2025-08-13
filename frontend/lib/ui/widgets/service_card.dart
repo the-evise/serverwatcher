@@ -7,6 +7,7 @@ class ServiceCard extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onHistory;
+  final VoidCallback onIncidents;
 
   const ServiceCard({
     super.key,
@@ -14,6 +15,7 @@ class ServiceCard extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onHistory,
+    required this.onIncidents,
   });
 
   @override
@@ -58,6 +60,11 @@ class ServiceCard extends StatelessWidget {
                 tooltip: 'History',
                 icon: const Icon(Icons.history, color: Colors.white70),
                 onPressed: onHistory,
+              ),
+              IconButton(
+                tooltip: 'Incidents',
+                icon: const Icon(Icons.warning_amber, color: Colors.white70),
+                onPressed: onIncidents, // pass from parent
               ),
               IconButton(
                 tooltip: 'Edit',

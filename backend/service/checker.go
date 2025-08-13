@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"net/http"
 	"time"
 )
@@ -45,33 +44,104 @@ func (s *Store) startChecker(svc *Service, stopChan chan struct{}) {
 		select {
 		case <-ticker.C:
 			status := checkService(svc)
-			s.Lock()
-			s.statuses[svc.ID] = status
+			now := time.Now().UTC()
 
-			// append to history
-			var maxHistory int8 = 100
+			s.Lock()
+			s.ensureMaps()
+
+			// Update latest + history
+			s.statuses[svc.ID] = status
+			const maxHistory = 1000
 			h := s.histories[svc.ID]
 			h = append(h, status)
-			if len(h) > int(maxHistory) {
-				h = h[len(h)-int(maxHistory):]
+			if len(h) > maxHistory {
+				h = h[len(h)-maxHistory:]
 			}
 			s.histories[svc.ID] = h
 
-			prevStatus := s.lastNotifiedStatus[svc.ID]
-			if status.Status != prevStatus {
-				// Only notify on change (OK->FAIL or FAIL->OK)
-				go SendTelegramNotification(fmt.Sprintf(
-					"[Serverwatcher]\nService: %s\nURL: %s\nStatus: %s\nResponse: %d ms\nTime: %s",
-					svc.Name, svc.URL, status.Status, status.ResponseMs, status.CheckedAt,
-				))
-				s.lastNotifiedStatus[svc.ID] = status.Status
+			// Update streaks
+			if status.Status == "FAIL" {
+				s.failStreak[svc.ID]++
+				s.okStreak[svc.ID] = 0
+				if s.failStreak[svc.ID] == 1 {
+					s.firstFailAt[svc.ID] = now
+				}
+			} else {
+				s.okStreak[svc.ID]++
+				s.failStreak[svc.ID] = 0
+				delete(s.firstFailAt, svc.ID)
+			}
+
+			prev := s.lastStatus[svc.ID]
+			p := s.policy
+
+			// --- Open logic (debounced)
+			if prev != "FAIL" && status.Status == "FAIL" {
+				openByConsec := s.failStreak[svc.ID] >= p.OpenConsecutiveFails
+				openBySeconds := false
+				if p.OpenSeconds > 0 {
+					if t0, ok := s.firstFailAt[svc.ID]; ok {
+						openBySeconds = now.Sub(t0) >= time.Duration(p.OpenSeconds)*time.Second
+					}
+				}
+				if openByConsec || openBySeconds {
+					inc := &Incident{
+						ID:        s.nextIncidentID,
+						ServiceID: svc.ID,
+						StartedAt: now,
+					}
+					s.nextIncidentID++
+					s.openIncident[svc.ID] = inc
+					s.Incidents[svc.ID] = append(s.Incidents[svc.ID], inc)
+					s.lastStatus[svc.ID] = "FAIL"
+
+					// notify (optional): cooldown by AlertCooldownSec
+					if s.canNotify(svc.ID, now) {
+						s.lastAlertAt[svc.ID] = now
+						// go SendTelegramNotification(fmt.Sprintf("[DOWN] %s\nURL: %s\nTime: %s", svc.Name, svc.URL, now.Format(time.RFC3339)))
+					}
+				}
+			}
+
+			// --- Close logic (debounced)
+			if prev == "FAIL" && status.Status == "OK" {
+				if s.okStreak[svc.ID] >= p.CloseConsecutiveOKs {
+					if open := s.openIncident[svc.ID]; open != nil {
+						open.EndedAt = &now
+						open.DurationS = int(now.Sub(open.StartedAt).Seconds())
+						s.openIncident[svc.ID] = nil
+						s.lastStatus[svc.ID] = "OK"
+
+						// notify (optional)
+						if s.canNotify(svc.ID, now) {
+							s.lastAlertAt[svc.ID] = now
+							// go SendTelegramNotification(fmt.Sprintf("[UP] %s\nURL: %s\nTime: %s\nDowntime: %ds", svc.Name, svc.URL, now.Format(time.RFC3339), open.DurationS))
+						}
+					} else {
+						// No open incident tracked, just update status
+						s.lastStatus[svc.ID] = "OK"
+					}
+				}
 			}
 
 			s.Unlock()
+
 		case <-stopChan:
 			return
 		}
 	}
+}
+
+func (s *Store) canNotify(svcID int, now time.Time) bool {
+	cd := time.Duration(s.policy.AlertCooldownSec) * time.Second
+	if cd <= 0 {
+		return true
+	}
+	last, ok := s.lastAlertAt[svcID]
+	if !ok {
+		return true
+	}
+	return now.Sub(last) >= cd
 }
 
 func checkService(svc *Service) StatusResult {
@@ -80,7 +150,7 @@ func checkService(svc *Service) StatusResult {
 	ms := int(time.Since(start).Milliseconds())
 
 	status := "OK"
-	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 400 {
+	if err != nil || resp == nil || resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		status = "FAIL"
 	}
 	if resp != nil {

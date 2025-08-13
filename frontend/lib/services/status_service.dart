@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'package:frontend/models/analytics.dart';
+import 'package:frontend/models/incident.dart';
 import 'package:http/http.dart' as http;
 import '../models/service.dart';
 
@@ -70,5 +72,29 @@ class StatusService {
     } else {
       throw Exception('Failed to load history');
     }
+  }
+
+  static Future<List<Incident>> fetchIncidents(int serviceId) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/services/incidents?id=$serviceId'),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Failed to load incidents');
+    }
+    final List data = json.decode(res.body);
+    return data.map((j) => Incident.fromJson(j)).toList();
+  }
+
+  static Future<Analytics> fetchAnalytics(
+    int serviceId, {
+    int hours = 24,
+  }) async {
+    final res = await http.get(
+      Uri.parse('$baseUrl/services/analytics?id=$serviceId&hours=$hours'),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Failed to load analytics');
+    }
+    return Analytics.fromJson(json.decode(res.body));
   }
 }

@@ -1,10 +1,22 @@
-// ui/service_dashboard.dart
+// lib/ui/service_dashboard.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:frontend/ui/history_chart.dart';
+import 'package:frontend/ui/incident_policy_card.dart';
+import '../models/analytics.dart';
+import '../models/incident.dart';
 import '../models/service.dart';
 import '../services/status_service.dart';
 import 'widgets/service_card.dart';
+
+String formatDuration(int s) {
+  final h = s ~/ 3600;
+  final m = (s % 3600) ~/ 60;
+  final sec = s % 60;
+  if (h > 0) return '${h}h ${m}m ${sec}s';
+  if (m > 0) return '${m}m ${sec}s';
+  return '${sec}s';
+}
 
 class ServiceDashboard extends StatefulWidget {
   const ServiceDashboard({super.key});
@@ -37,9 +49,9 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
   }
 
   void _refresh() {
-    final fut = StatusService.fetchStatuses(); // do async creation outside
+    final fut = StatusService.fetchStatuses();
     setState(() {
-      _futureServices = fut; // assign Future synchronously
+      _futureServices = fut;
     });
   }
 
@@ -49,21 +61,36 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     final interval = int.tryParse(_intervalController.text.trim()) ?? 10;
 
     if (name.isEmpty || url.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Name and URL are required')),
       );
       return;
     }
-    await StatusService.addService(name: name, url: url, interval: interval);
-    _nameController.clear();
-    _urlController.clear();
-    _intervalController.text = '10';
-    _refresh();
+    try {
+      await StatusService.addService(name: name, url: url, interval: interval);
+      _nameController.clear();
+      _urlController.clear();
+      _intervalController.text = '10';
+      _refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Add failed: $e')));
+    }
   }
 
   Future<void> _deleteService(int id) async {
-    await StatusService.deleteService(id);
-    _refresh();
+    try {
+      await StatusService.deleteService(id);
+      _refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
   }
 
   Future<void> _editService(ServiceStatus svc) async {
@@ -75,7 +102,7 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     final urlCtrl = TextEditingController(text: svc.url);
     final intervalCtrl = TextEditingController(
       text: '10',
-    ); // optional: wire actual interval if added to model
+    ); // set actual if model includes it
 
     await showDialog(
       context: context,
@@ -112,14 +139,22 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
               final url = urlCtrl.text.trim();
               final interval = int.tryParse(intervalCtrl.text.trim()) ?? 10;
               if (name.isEmpty || url.isEmpty) return;
-              await StatusService.updateService(
-                id: svc.id,
-                name: name,
-                url: url,
-                interval: interval,
-              );
-              if (context.mounted) Navigator.pop(context);
-              _refresh();
+              try {
+                await StatusService.updateService(
+                  id: svc.id,
+                  name: name,
+                  url: url,
+                  interval: interval,
+                );
+                if (!mounted) return;
+                Navigator.pop(context);
+                _refresh();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Update failed: $e')));
+              }
             },
             child: const Text('Save'),
           ),
@@ -134,7 +169,7 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
       isScrollControlled: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
       ),
       builder: (_) => Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
@@ -208,18 +243,141 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     );
   }
 
+  void _showIncidentsSheet(int id, String name) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: SizedBox(
+          height: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$name – Incidents',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 12),
+              FutureBuilder(
+                future: Future.wait([
+                  StatusService.fetchAnalytics(id, hours: 24),
+                  StatusService.fetchIncidents(id),
+                ]),
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Expanded(
+                      child: Center(child: CircularProgressIndicator()),
+                    );
+                  }
+                  if (snap.hasError) {
+                    return Expanded(
+                      child: Center(child: Text('Error: ${snap.error}')),
+                    );
+                  }
+                  final analytics = snap.data![0] as Analytics;
+                  final incidents = (snap.data![1] as List<Incident>).reversed
+                      .toList(); // newest first
+
+                  return Expanded(
+                    child: Column(
+                      children: [
+                        _AnalyticsRow(analytics: analytics),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: ListView.separated(
+                            itemCount: incidents.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 12),
+                            itemBuilder: (context, i) {
+                              final inc = incidents[i];
+                              final open = inc.endedAt == null;
+                              final dur = open
+                                  ? 'ongoing'
+                                  : formatDuration(inc.durationS);
+                              final endStr = open
+                                  ? '—'
+                                  : inc.endedAt!
+                                        .toIso8601String()
+                                        .split('.')
+                                        .first
+                                        .replaceAll('T', ' ');
+                              return ListTile(
+                                dense: true,
+                                leading: Icon(
+                                  open ? Icons.error : Icons.check_circle,
+                                  color: open
+                                      ? Colors.redAccent
+                                      : Colors.greenAccent,
+                                ),
+                                title: Text(
+                                  open ? 'Outage (OPEN)' : 'Outage (RESOLVED)',
+                                ),
+                                subtitle: Text(
+                                  'Start: ${inc.startedAt.toIso8601String().split(".").first.replaceAll("T", " ")}\n'
+                                  'End:   $endStr\n'
+                                  'Duration: $dur',
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showPolicySheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
+      ),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [IncidentPolicyCard()],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Serverwatcher'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _showPolicySheet,
+            tooltip: 'Incident Policy',
+          ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
         ],
       ),
       body: Column(
         children: [
-          // Add form card
+          // Add service form
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: Card(
@@ -271,10 +429,12 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                 if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final services = snapshot.data!
-                  ..sort((a, b) => a.id.compareTo(b.id));
-                if (services!.isEmpty)
+                final List<ServiceStatus> services = List<ServiceStatus>.from(
+                  snapshot.data!,
+                )..sort((a, b) => a.id.compareTo(b.id));
+                if (services.isEmpty) {
                   return const Center(child: Text('No services yet'));
+                }
 
                 return LayoutBuilder(
                   builder: (context, constraints) {
@@ -303,6 +463,7 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                           onEdit: () => _editService(s),
                           onDelete: () => _deleteService(s.id),
                           onHistory: () => _showHistorySheet(s.id, s.name),
+                          onIncidents: () => _showIncidentsSheet(s.id, s.name),
                         );
                       },
                     );
@@ -310,6 +471,59 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnalyticsRow extends StatelessWidget {
+  final Analytics analytics;
+  const _AnalyticsRow({required this.analytics});
+
+  @override
+  Widget build(BuildContext context) {
+    final gold = const Color(0xFFFFD700);
+    return Row(
+      children: [
+        _StatChip(
+          label: 'Uptime',
+          value: '${analytics.uptimePercent.toStringAsFixed(2)}%',
+          color: gold,
+        ),
+        const SizedBox(width: 8),
+        _StatChip(label: 'Avg', value: '${analytics.avgResponseMs} ms'),
+        const SizedBox(width: 8),
+        _StatChip(label: 'Incidents', value: '${analytics.incidentCount}'),
+        const SizedBox(width: 8),
+        _StatChip(label: 'MTTR', value: formatDuration(analytics.mttrSeconds)),
+      ],
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+  const _StatChip({required this.label, required this.value, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = color ?? Colors.white70;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: c.withOpacity(0.6)),
+      ),
+      child: Row(
+        children: [
+          Text('$label: ', style: const TextStyle(fontWeight: FontWeight.w600)),
+          Text(
+            value,
+            style: TextStyle(color: c, fontWeight: FontWeight.w700),
           ),
         ],
       ),

@@ -14,6 +14,9 @@ func main() {
 	http.HandleFunc("/services/delete", withCORS(api.DeleteServiceHandler))
 	http.HandleFunc("/services/history", withCORS(api.ServiceHistoryHandler))
 	http.HandleFunc("/services/update", withCORS(api.UpdateServiceHandler))
+	http.HandleFunc("/services/incidents", withCORS(api.ServiceIncidentHandler))
+	http.HandleFunc("/services/analytics", withCORS(api.ServiceAnalyticsHandler))
+	http.HandleFunc("/policy", withCORS(api.PolicyHandler))
 
 	// Add CORS headers if calling from Flutter web
 
