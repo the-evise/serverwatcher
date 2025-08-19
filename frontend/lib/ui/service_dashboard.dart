@@ -28,9 +28,18 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
   late Future<List<ServiceStatus>> _futureServices;
   Timer? _refreshTimer;
 
+  // Add form
   final _nameController = TextEditingController();
   final _urlController = TextEditingController();
   final _intervalController = TextEditingController(text: '10');
+
+  // Reliability (Add form)
+  final _timeoutCtrl = TextEditingController(text: '2500');
+  final _retriesCtrl = TextEditingController(text: '1');
+  final _backoffCtrl = TextEditingController(text: '300');
+
+  // API key
+  final _apiKeyCtrl = TextEditingController();
 
   @override
   void initState() {
@@ -45,13 +54,19 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _nameController.dispose();
+    _urlController.dispose();
+    _intervalController.dispose();
+    _timeoutCtrl.dispose();
+    _retriesCtrl.dispose();
+    _backoffCtrl.dispose();
+    _apiKeyCtrl.dispose();
     super.dispose();
   }
 
   void _refresh() {
-    final fut = StatusService.fetchStatuses();
     setState(() {
-      _futureServices = fut;
+      _futureServices = StatusService.fetchStatuses();
     });
   }
 
@@ -59,6 +74,9 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     final name = _nameController.text.trim();
     final url = _urlController.text.trim();
     final interval = int.tryParse(_intervalController.text.trim()) ?? 10;
+    final timeoutMs = int.tryParse(_timeoutCtrl.text.trim()) ?? 2500;
+    final retries = int.tryParse(_retriesCtrl.text.trim()) ?? 1;
+    final backoffMs = int.tryParse(_backoffCtrl.text.trim()) ?? 300;
 
     if (name.isEmpty || url.isEmpty) {
       if (!mounted) return;
@@ -68,10 +86,20 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
       return;
     }
     try {
-      await StatusService.addService(name: name, url: url, interval: interval);
+      await StatusService.addService(
+        name: name,
+        url: url,
+        interval: interval,
+        timeoutMs: timeoutMs,
+        retries: retries,
+        retryBackoffMs: backoffMs,
+      );
       _nameController.clear();
       _urlController.clear();
       _intervalController.text = '10';
+      _timeoutCtrl.text = '2500';
+      _retriesCtrl.text = '1';
+      _backoffCtrl.text = '300';
       _refresh();
     } catch (e) {
       if (!mounted) return;
@@ -101,32 +129,71 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
     final nameCtrl = TextEditingController(text: svc.name);
     final urlCtrl = TextEditingController(text: svc.url);
     final intervalCtrl = TextEditingController(
-      text: '10',
-    ); // set actual if model includes it
+      text: (svc.intervalSec ?? 10).toString(),
+    );
+    final timeoutCtrl = TextEditingController(
+      text: (svc.timeoutMs ?? 2500).toString(),
+    );
+    final retriesCtrl = TextEditingController(
+      text: (svc.retries ?? 1).toString(),
+    );
+    final backoffCtrl = TextEditingController(
+      text: (svc.retryBackoffMs ?? 300).toString(),
+    );
 
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Edit Service'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: urlCtrl,
-              decoration: const InputDecoration(labelText: 'URL'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: intervalCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Interval (s)'),
-            ),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: urlCtrl,
+                decoration: const InputDecoration(labelText: 'URL'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: intervalCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Interval (s)'),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: timeoutCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Timeout (ms)',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: retriesCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'Retries'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: backoffCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Backoff (ms)'),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -138,6 +205,9 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
               final name = nameCtrl.text.trim();
               final url = urlCtrl.text.trim();
               final interval = int.tryParse(intervalCtrl.text.trim()) ?? 10;
+              final timeoutMs = int.tryParse(timeoutCtrl.text.trim()) ?? 2500;
+              final retries = int.tryParse(retriesCtrl.text.trim()) ?? 1;
+              final backoffMs = int.tryParse(backoffCtrl.text.trim()) ?? 300;
               if (name.isEmpty || url.isEmpty) return;
               try {
                 await StatusService.updateService(
@@ -145,6 +215,9 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                   name: name,
                   url: url,
                   interval: interval,
+                  timeoutMs: timeoutMs,
+                  retries: retries,
+                  retryBackoffMs: backoffMs,
                 );
                 if (!mounted) return;
                 Navigator.pop(context);
@@ -284,7 +357,7 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                   }
                   final analytics = snap.data![0] as Analytics;
                   final incidents = (snap.data![1] as List<Incident>).reversed
-                      .toList(); // newest first
+                      .toList();
 
                   return Expanded(
                     child: Column(
@@ -349,14 +422,39 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
       ),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: const [IncidentPolicyCard()],
-          ),
+      builder: (_) => const Padding(
+        padding: EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: SingleChildScrollView(child: IncidentPolicyCard()),
+      ),
+    );
+  }
+
+  void _showApiKeyDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('API Key'),
+        content: TextField(
+          controller: _apiKeyCtrl,
+          decoration: const InputDecoration(labelText: 'X-API-Key'),
+          obscureText: true,
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              StatusService.setApiKey(_apiKeyCtrl.text);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('API key set')));
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
   }
@@ -367,6 +465,11 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
       appBar: AppBar(
         title: const Text('Serverwatcher'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.vpn_key),
+            onPressed: _showApiKeyDialog,
+            tooltip: 'Set API Key',
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _showPolicySheet,
@@ -383,39 +486,77 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _nameController,
-                        decoration: const InputDecoration(labelText: 'Name'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _urlController,
-                        decoration: const InputDecoration(labelText: 'URL'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 110,
-                      child: TextField(
-                        controller: _intervalController,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'Interval (s)',
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 200,
+                        child: TextField(
+                          controller: _nameController,
+                          decoration: const InputDecoration(labelText: 'Name'),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton.icon(
-                      onPressed: _addService,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add'),
-                    ),
-                  ],
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 280,
+                        child: TextField(
+                          controller: _urlController,
+                          decoration: const InputDecoration(labelText: 'URL'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 110,
+                        child: TextField(
+                          controller: _intervalController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Interval (s)',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 120,
+                        child: TextField(
+                          controller: _timeoutCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Timeout (ms)',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 90,
+                        child: TextField(
+                          controller: _retriesCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Retries',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 120,
+                        child: TextField(
+                          controller: _backoffCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Backoff (ms)',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: _addService,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -429,9 +570,8 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                 if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                final List<ServiceStatus> services = List<ServiceStatus>.from(
-                  snapshot.data!,
-                )..sort((a, b) => a.id.compareTo(b.id));
+                final services = List<ServiceStatus>.from(snapshot.data!)
+                  ..sort((a, b) => a.id.compareTo(b.id));
                 if (services.isEmpty) {
                   return const Center(child: Text('No services yet'));
                 }
@@ -460,6 +600,10 @@ class _ServiceDashboardState extends State<ServiceDashboard> {
                         final s = services[i];
                         return ServiceCard(
                           svc: s,
+                          intervalSec: s.intervalSec,
+                          timeoutMs: s.timeoutMs,
+                          retries: s.retries,
+                          retryBackoffMs: s.retryBackoffMs,
                           onEdit: () => _editService(s),
                           onDelete: () => _deleteService(s.id),
                           onHistory: () => _showHistorySheet(s.id, s.name),

@@ -6,6 +6,12 @@ class ServiceStatus {
   final int responseMs; // Response time in ms
   final String checkedAt; // ISO 8601 timestamp
 
+  // NEW (optional): present only if your backend includes them in JSON
+  final int? intervalSec; // backend may expose "interval" as seconds
+  final int? timeoutMs; // reliability
+  final int? retries;
+  final int? retryBackoffMs;
+
   ServiceStatus({
     required this.id,
     required this.name,
@@ -13,6 +19,10 @@ class ServiceStatus {
     required this.status,
     required this.responseMs,
     required this.checkedAt,
+    this.intervalSec,
+    this.timeoutMs,
+    this.retries,
+    this.retryBackoffMs,
   });
 
   factory ServiceStatus.fromJson(Map<String, dynamic> json) {
@@ -23,6 +33,13 @@ class ServiceStatus {
       status: json['status'] as String,
       responseMs: json['responseMs'] as int,
       checkedAt: json['checkedAt'] as String,
+      // Try to read optional fields if backend includes them
+      intervalSec: (json['interval'] is int)
+          ? json['interval'] as int
+          : (json['intervalSec'] as int?) /* tolerate either key */,
+      timeoutMs: json['timeoutMs'] as int?,
+      retries: json['retries'] as int?,
+      retryBackoffMs: json['retryBackoffMs'] as int?,
     );
   }
 
@@ -33,5 +50,9 @@ class ServiceStatus {
     'status': status,
     'responseMs': responseMs,
     'checkedAt': checkedAt,
+    if (intervalSec != null) 'interval': intervalSec,
+    if (timeoutMs != null) 'timeoutMs': timeoutMs,
+    if (retries != null) 'retries': retries,
+    if (retryBackoffMs != null) 'retryBackoffMs': retryBackoffMs,
   };
 }

@@ -18,6 +18,10 @@ type Service struct {
 	URL      string        `json:"url"`
 	Interval time.Duration `json:"interval"` // check interval in seconds
 	Active   bool          `json:"active"`
+
+	TimeoutMs      int `json:"timeoutMs"`      // default 2500
+	Retries        int `json:"retries"`        // default 1
+	RetryBackoffMs int `json:"retryBackoffMs"` // default 300
 }
 
 // StatusResult represents the latest status of a monitored service
@@ -237,7 +241,7 @@ func (s *Store) RestartChecker(svc *Service) {
 	go s.startChecker(svc, stopChan)
 }
 
-func (s *Store) UpdateService(id int, name, url string, interval int) error {
+func (s *Store) UpdateService(id int, name, url string, interval int, timeoutMs, retries, backoffMs int) error {
 	s.Lock()
 	defer s.Unlock()
 	svc, ok := s.services[id]
@@ -247,6 +251,20 @@ func (s *Store) UpdateService(id int, name, url string, interval int) error {
 	svc.Name = name
 	svc.URL = url
 	svc.Interval = time.Duration(interval) * time.Second
+
+	// set reliability params (with defaults if zero/negative)
+	if timeoutMs <= 0 {
+		timeoutMs = 2500
+	}
+	if retries < 0 {
+		retries = 1
+	}
+	if backoffMs <= 0 {
+		backoffMs = 300
+	}
+	svc.TimeoutMs = timeoutMs
+	svc.Retries = retries
+	svc.RetryBackoffMs = backoffMs
 
 	// restart checker with new config
 	if stopChan, ok := s.stopChans[id]; ok {
@@ -369,4 +387,25 @@ func minTime(a, b time.Time) time.Time {
 		return a
 	}
 	return b
+}
+
+func (s *Store) HasService(id int) bool {
+	s.Lock()
+	defer s.Unlock()
+	_, ok := s.services[id]
+	return ok
+}
+
+// Always returns a slice (possibly empty)
+func (s *Store) GetIncidentsOrEmpty(id int) []*Incident {
+	s.Lock()
+	defer s.Unlock()
+	incs := s.Incidents[id]
+	if incs == nil {
+		return []*Incident{}
+	}
+	// return a copy so callers can't mutate internals
+	out := make([]*Incident, len(incs))
+	copy(out, incs)
+	return out
 }
