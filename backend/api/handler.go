@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"serverwatcher/notify"
 	"serverwatcher/service"
 	"sort"
 	"strconv"
@@ -23,6 +25,22 @@ func init() {
 	for _, svc := range services {
 		store.RestartChecker(svc)
 	}
+
+	var notifs []notify.Notifier
+	if v := os.Getenv("SLACK_WEBHOOK_URL"); v != "" {
+		notifs = append(notifs, notify.Slack{WebhookURL: v})
+	}
+	if v := os.Getenv("ALERT_WEBHOOK_URL"); v != "" {
+		notifs = append(notifs, notify.Webhook{URL: v})
+	}
+	store.SetNotifiers(notifs)
+
+	sqlStore, err := service.OpenSQLite("serverwatcher.db")
+	if err != nil {
+		log.Fatalf("failed to open sqlite: %v", err)
+	}
+	defer sqlStore.DB.Close()
+
 }
 
 func PingHandler(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"serverwatcher/notify"
 	"sync"
 	"time"
 )
@@ -22,6 +23,15 @@ type Service struct {
 	TimeoutMs      int `json:"timeoutMs"`      // default 2500
 	Retries        int `json:"retries"`        // default 1
 	RetryBackoffMs int `json:"retryBackoffMs"` // default 300
+
+	// Assertions
+	ExpectedStatus int    `json:"expectedStatus"`     // default 200
+	Contains       string `json:"contains,omitempty"` // optional substring in body
+
+	// SLO (used later)
+	SLOTargetPercent float64  `json:"sloTargetPercent,omitempty"` // e.g., 99.9
+	Public           bool     `json:"public,omitempty"`           // show on status page
+	Tags             []string `json:"tags,omitempty"`             // team/env
 }
 
 // StatusResult represents the latest status of a monitored service
@@ -69,14 +79,20 @@ type Store struct {
 	nextIncidentID int
 	stopChans      map[int]chan struct{}
 
+	notifiers          []notify.Notifier
 	lastNotifiedStatus map[int]string
 
 	failStreak  map[int]int
 	okStreak    map[int]int
 	firstFailAt map[int]time.Time
-	lastAlertAt map[int]time.Time
+	lastAlertAt map[int]time.Time // cooldown tracking
 
 	policy IncidentPolicy
+
+	silences      []*Silence
+	nextSilenceID int
+
+	
 }
 
 type storeData struct {
@@ -376,6 +392,13 @@ func (s *Store) ComputeAnalytics(id int, hours int) Analytics {
 	}
 }
 
+func (s *Store) SetNotifiers(n []notify.Notifier) { s.notifiers = n }
+func (s *Store) broadcast(title, text string) {
+	for _, n := range s.notifiers {
+		_ = n.Notify(title, text) // ignore errors for now
+	}
+}
+
 func maxTime(a, b time.Time) time.Time {
 	if a.After(b) {
 		return a
@@ -408,4 +431,46 @@ func (s *Store) GetIncidentsOrEmpty(id int) []*Incident {
 	out := make([]*Incident, len(incs))
 	copy(out, incs)
 	return out
+}
+
+func (s *Store) GetServiceSLOTarget(id int) float64 {
+	s.Lock()
+	defer s.Unlock()
+	if svc, ok := s.services[id]; ok && svc.SLOTargetPercent > 0 {
+		return svc.SLOTargetPercent
+	}
+	return 99.9
+}
+
+// todo: This is a simple estimator. If you want exact downtime,
+// todo: compute from incident durations within the window instead.
+func (s *Store) EstimateDowntimeSeconds(id, hours int) float64 {
+	// simple: count FAIL samples within window * median interval
+	s.Lock()
+	h := s.histories[id]
+	s.Unlock()
+	if len(h) == 0 {
+		return 0
+	}
+	cut := time.Now().Add(-time.Duration(hours) * time.Hour)
+	fail := 0
+	var intervals []int
+	for _, e := range h {
+		t, _ := time.Parse(time.RFC3339, e.CheckedAt)
+		if t.Before(cut) {
+			continue
+		}
+		if e.Status != "OK" {
+			fail++
+		}
+		intervals = append(intervals, e.ResponseMs) // wrong metric; but we don't store interval per sample
+	}
+	// use configured service interval instead
+	sec := 0.0
+	s.Lock()
+	if svc, ok := s.services[id]; ok && svc.Interval > 0 {
+		sec = float64(int(svc.Interval / time.Second))
+	}
+	s.Unlock()
+	return float64(fail) * sec
 }

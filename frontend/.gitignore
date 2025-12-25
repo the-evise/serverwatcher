@@ -34,6 +34,7 @@ migrate_working_dir/
 /build/
 
 backend/serverwatcher_data.json
+backend/notify/
 
 # Symbolication related
 app.*.symbols
